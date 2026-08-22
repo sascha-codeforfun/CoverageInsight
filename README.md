@@ -82,7 +82,7 @@ The binary is built by GitHub Actions from the tagged commit and carries a build
 attestation, so you don't have to take my word for where it came from:
 
 ```
-gh attestation verify CoverageInsight.exe --repo sascha-codeforfun/CoverageInsight
+gh attestation verify CoverageInsight-v1.0.0-win-x64.zip --repo sascha-codeforfun/CoverageInsight
 ```
 
 A `.sha256` file sits beside the zip if you prefer to check that instead.

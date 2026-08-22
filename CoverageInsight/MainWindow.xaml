@@ -1,0 +1,538 @@
+<Window x:Class="CoverageInsight.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:m="clr-namespace:CoverageInsight.Models"
+        xmlns:vm="clr-namespace:CoverageInsight.ViewModels"
+        Title="Coverage Insight"
+        Icon="Assets/app_256.png"
+        Width="1320" Height="840" MinWidth="1180" MinHeight="640"
+        WindowStartupLocation="CenterScreen"
+        AllowDrop="True"
+        Drop="OnDrop"
+        DragOver="OnDragOver"
+        PreviewKeyDown="OnPreviewKeyDown"
+        Background="{StaticResource BaseBrush}"
+        TextOptions.TextFormattingMode="Display"
+        FontFamily="{StaticResource ChromeFont}">
+
+    <Window.DataContext>
+        <vm:MainViewModel />
+    </Window.DataContext>
+
+    <Window.InputBindings>
+        <KeyBinding Key="O" Modifiers="Ctrl" Command="{Binding OpenCommand}" />
+        <KeyBinding Key="F5" Command="{Binding ReloadCommand}" />
+        <KeyBinding Key="E" Modifiers="Ctrl" Command="{Binding ExportHtmlCommand}" />
+        <KeyBinding Key="C" Modifiers="Ctrl+Shift" Command="{Binding CopyDigestCommand}" />
+    </Window.InputBindings>
+
+    <Window.Resources>
+
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Padding" Value="13,10" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+
+        <Style x:Key="KpiValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="21" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource InkBrush}" />
+            <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+        </Style>
+
+        <Style x:Key="KpiLabel" TargetType="TextBlock" BasedOn="{StaticResource Eyebrow}">
+            <Setter Property="Margin" Value="0,3,0,0" />
+        </Style>
+
+        <!-- Offered on both the tree and the work queue; the command disables itself
+             when the selected row carries no source file. -->
+        <ContextMenu x:Key="RowMenu">
+            <MenuItem Header="Open in Visual Studio"
+                      Command="{Binding PlacementTarget.Tag.OpenInIdeCommand,
+                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+        </ContextMenu>
+
+        <!-- The signature element: one three-part ribbon, repeated at every level
+             of the report so covered / partial / missed always read the same way. -->
+        <DataTemplate x:Key="Ribbon">
+            <Border Height="8" Width="150"
+                    BorderBrush="#22000000" BorderThickness="1"
+                    Background="{StaticResource TrackBrush}"
+                    SnapsToDevicePixels="True">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="{Binding BarCovered, Converter={StaticResource Star}}" />
+                        <ColumnDefinition Width="{Binding BarPartial, Converter={StaticResource Star}}" />
+                        <ColumnDefinition Width="{Binding BarUncovered, Converter={StaticResource Star}}" />
+                    </Grid.ColumnDefinitions>
+                    <Rectangle Fill="{StaticResource CoveredBrush}" />
+                    <Rectangle Grid.Column="1" Fill="{StaticResource PartialBrush}" />
+                    <Rectangle Grid.Column="2">
+                        <Rectangle.Style>
+                            <Style TargetType="Rectangle">
+                                <Setter Property="Fill" Value="{StaticResource MissedBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasData}" Value="False">
+                                        <Setter Property="Fill" Value="{StaticResource TrackBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Rectangle.Style>
+                    </Rectangle>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <!-- One row of the tree. -->
+        <HierarchicalDataTemplate DataType="{x:Type m:CoverageNode}" ItemsSource="{Binding Children}">
+            <Grid Margin="2,2,6,2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="2*" MinWidth="100" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="62" />
+                    <!-- Takes the slack a short assembly name leaves in the middle,
+                         but capped so it can't crowd out the name on a small window. -->
+                    <ColumnDefinition Width="*" MinWidth="120" MaxWidth="330" />
+                </Grid.ColumnDefinitions>
+
+                <Border Background="{StaticResource PanelAltBrush}"
+                        BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                        CornerRadius="3" Padding="4,2" Margin="0,0,8,0"
+                        VerticalAlignment="Center">
+                    <TextBlock Text="{Binding KindBadge}" FontSize="9" FontWeight="SemiBold"
+                               Foreground="{StaticResource FaintBrush}" />
+                </Border>
+
+                <TextBlock Grid.Column="1" Text="{Binding Name}"
+                           Style="{StaticResource Mono}"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center"
+                           ToolTip="{Binding FullPath}" />
+
+                <ContentControl Grid.Column="2" Content="{Binding}"
+                                ContentTemplate="{StaticResource Ribbon}"
+                                Margin="10,0" VerticalAlignment="Center"
+                                Focusable="False" />
+
+                <TextBlock Grid.Column="3" Text="{Binding PercentText}"
+                           FontSize="12" FontWeight="SemiBold"
+                           Typography.NumeralAlignment="Tabular"
+                           TextAlignment="Right" VerticalAlignment="Center"
+                           Foreground="{Binding LinePercent, Converter={StaticResource PercentBrush}}" />
+
+                <TextBlock Grid.Column="4" Text="{Binding CountsText}"
+                           FontSize="11" Foreground="{StaticResource FaintBrush}"
+                           TextAlignment="Right" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" Margin="12,0,0,0" />
+            </Grid>
+        </HierarchicalDataTemplate>
+
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- ============ header ============ -->
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="0" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Orientation="Horizontal" Grid.Column="0">
+                <Image Source="Assets/app_256.png" Width="34" Height="34"
+                       VerticalAlignment="Center" Margin="0,0,12,0"
+                       RenderOptions.BitmapScalingMode="HighQuality" />
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="COVERAGE INSIGHT" Style="{StaticResource Eyebrow}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <TextBlock Text="{Binding FileName}" FontSize="19" FontWeight="SemiBold"
+                                   Foreground="{StaticResource InkBrush}" VerticalAlignment="Bottom"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding FormatName}" FontSize="12" Margin="10,0,0,3"
+                                   Foreground="{StaticResource DimBrush}" VerticalAlignment="Bottom" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+
+            <WrapPanel Orientation="Horizontal" Grid.Column="1"
+                       HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Button Content="Open report" Command="{Binding OpenCommand}"
+                        Style="{StaticResource PrimaryButton}" />
+                <Button Content="Reload" Command="{Binding ReloadCommand}"
+                        Style="{StaticResource ToolButton}" />
+                <Button Content="Copy digest" Command="{Binding CopyDigestCommand}"
+                        Style="{StaticResource ToolButton}"
+                        ToolTip="Copies a compact markdown digest — types under target, worst first — sized for pasting into a model's context. Ctrl+Shift+C" />
+                <Button Content="Save digest" Command="{Binding SaveDigestCommand}"
+                        Style="{StaticResource ToolButton}" />
+                <Button Content="Save HTML" Command="{Binding ExportHtmlCommand}"
+                        Style="{StaticResource ToolButton}" />
+                <Button Content="Save CSV" Command="{Binding ExportCsvCommand}"
+                        Style="{StaticResource ToolButton}"
+                        ToolTip="Full spreadsheet export: every node, every counter." />
+                <Button Content="Save CSV for AI" Command="{Binding ExportAiCsvCommand}"
+                        Style="{StaticResource ToolButton}" Margin="0"
+                        ToolTip="{Binding RoleRuleHelp}" />
+            </WrapPanel>
+        </Grid>
+
+        <!-- ============ headline numbers ============ -->
+        <UniformGrid Grid.Row="1" Rows="1" Margin="0,18,0,0">
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="{Binding OverallPercentText}" Style="{StaticResource KpiValue}"
+                               Foreground="{Binding Totals.LinePercent, Converter={StaticResource PercentBrush}, FallbackValue={StaticResource DimBrush}, TargetNullValue={StaticResource DimBrush}}" />
+                    <TextBlock Text="LINES COVERED" Style="{StaticResource KpiLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="{Binding LinesText}" Style="{StaticResource KpiValue}" FontSize="17" />
+                    <TextBlock Text="COVERED / COVERABLE" Style="{StaticResource KpiLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="{Binding MissedText}" Style="{StaticResource KpiValue}"
+                               Foreground="{StaticResource MissedBrush}" />
+                    <TextBlock Text="LINES NEVER HIT" Style="{StaticResource KpiLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="{Binding PartialText}" Style="{StaticResource KpiValue}"
+                               Foreground="{StaticResource PartialBrush}" />
+                    <TextBlock Text="LINES PARTLY HIT" Style="{StaticResource KpiLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="{Binding BranchText}" Style="{StaticResource KpiValue}" />
+                    <TextBlock Text="BRANCHES" Style="{StaticResource KpiLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="{Binding BlockText}" Style="{StaticResource KpiValue}" />
+                    <TextBlock Text="BLOCKS" Style="{StaticResource KpiLabel}" />
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}" Margin="0">
+                <StackPanel>
+                    <TextBlock Text="{Binding RiskCountText}" Style="{StaticResource KpiValue}" />
+                    <TextBlock Text="{Binding RiskCaption}" Style="{StaticResource KpiLabel}" />
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <!-- ============ filters ============ -->
+        <Grid Grid.Row="2" Margin="0,14,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="0" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Orientation="Horizontal" Grid.Column="0">
+                <Grid Width="280">
+                    <TextBox Style="{StaticResource SearchBox}"
+                             Name="SearchBox"
+                             Text="{Binding Search, UpdateSourceTrigger=PropertyChanged, Delay=180}" />
+                    <TextBlock Text="Filter by type, method or file…"
+                               Style="{StaticResource Mono}"
+                               Foreground="{StaticResource FaintBrush}"
+                               Margin="9,0,0,0" VerticalAlignment="Center"
+                               IsHitTestVisible="False"
+                               Visibility="{Binding Search, Converter={StaticResource StringToVis}, ConverterParameter=invert}" />
+                </Grid>
+
+                <TextBlock Text="TARGET" Style="{StaticResource Eyebrow}"
+                           VerticalAlignment="Center" Margin="20,0,10,0" />
+                <Slider Style="{StaticResource ThresholdSlider}" Width="130"
+                        Value="{Binding Threshold}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Threshold, StringFormat={}{0:0}%}"
+                           Foreground="{StaticResource InkBrush}" FontSize="12" FontWeight="SemiBold"
+                           Typography.NumeralAlignment="Tabular"
+                           Width="38" TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Grid.Column="1"
+                        HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Button Content="Expand all" Command="{Binding ExpandAllCommand}"
+                        Style="{StaticResource ToolButton}" />
+                <Button Content="Collapse all" Command="{Binding CollapseAllCommand}"
+                        Style="{StaticResource ToolButton}" Margin="0" />
+            </StackPanel>
+
+            <!-- second line: what's in scope.
+                 Two columns rather than one: overlaid children silently draw on top of
+                 each other when the window is narrow, which is invisible until it isn't. -->
+            <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" MinWidth="0" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" Grid.Column="0">
+                    <TextBlock Text="SHOW" Style="{StaticResource Eyebrow}"
+                               VerticalAlignment="Center" Margin="0,0,12,0" />
+                    <CheckBox Content="Under target only" Style="{StaticResource FilterCheck}"
+                              IsChecked="{Binding OnlyBelowThreshold}" />
+                    <CheckBox Content="Types only" Style="{StaticResource FilterCheck}"
+                              IsChecked="{Binding HideMethods}" Margin="14,0,0,0" />
+
+                    <Border Width="1" Background="{StaticResource LineBrush}" Margin="18,2,18,2" />
+
+                    <TextBlock Text="HIDE" Style="{StaticResource Eyebrow}"
+                               VerticalAlignment="Center" Margin="0,0,12,0" />
+                    <CheckBox Content="Network" Style="{StaticResource FilterCheck}"
+                              IsChecked="{Binding HideNetwork}"
+                              ToolTip="{Binding NetworkRuleHelp}"
+                              ToolTipService.InitialShowDelay="250" />
+                    <CheckBox Content="WPF UI" Style="{StaticResource FilterCheck}"
+                              IsChecked="{Binding HideWpfUi}" Margin="14,0,0,0"
+                              ToolTip="{Binding WpfUiRuleHelp}"
+                              ToolTipService.InitialShowDelay="250" />
+                    <CheckBox Content="Test assemblies" Style="{StaticResource FilterCheck}"
+                              IsChecked="{Binding HideTestAssemblies}" Margin="14,0,0,0"
+                              ToolTip="{Binding TestAssemblyRuleHelp}"
+                              ToolTipService.InitialShowDelay="250" />
+                    <CheckBox Content="Generated" Style="{StaticResource FilterCheck}"
+                              IsChecked="{Binding HideGenerated}" Margin="14,0,0,0"
+                              ToolTip="{Binding GeneratedRuleHelp}"
+                              ToolTipService.InitialShowDelay="250" />
+                </StackPanel>
+
+                <!-- A Grid, not a StackPanel: a horizontal StackPanel gives its children
+                     unlimited width, so TextTrimming never engages and the summary just
+                     overflows leftward across the checkboxes. A star column constrains it. -->
+                <Grid Grid.Column="1" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MinWidth="0" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" Text="{Binding ExclusionSummary}"
+                               Style="{StaticResource Eyebrow}"
+                               Foreground="{StaticResource AccentBrush}"
+                               VerticalAlignment="Center" Margin="12,0,18,0"
+                               HorizontalAlignment="Right"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding ExclusionSummary}" />
+                    <CheckBox Grid.Column="1" Content="Exports follow filters"
+                              Style="{StaticResource FilterCheck}"
+                              IsChecked="{Binding ExportsFollowFilters}"
+                              ToolTip="On: saved files contain only the rows shown above, with the real totals kept in the header. Off: exports contain everything still in scope." />
+                    <CheckBox Grid.Column="2" Content="Fold generated"
+                              Style="{StaticResource FilterCheck}"
+                              IsChecked="{Binding FoldGenerated}" Margin="14,0,0,0"
+                              ToolTip="{Binding FoldRuleHelp}"
+                              ToolTipService.InitialShowDelay="250" />
+                </Grid>
+            </Grid>
+        </Grid>
+
+        <!-- ============ tree + risk rail ============ -->
+        <Grid Grid.Row="3" Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="420" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="360" MinWidth="260" />
+            </Grid.ColumnDefinitions>
+
+            <Border Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Margin="14,11,14,9">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" MinWidth="0" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="BREAKDOWN — ASSEMBLY › NAMESPACE › TYPE › METHOD"
+                                   Style="{StaticResource Eyebrow}"
+                                   TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
+                        <TextBlock Grid.Column="1" Text="{Binding ScopeText}"
+                                   Style="{StaticResource Eyebrow}" />
+                    </Grid>
+
+                    <TreeView Grid.Row="1" x:Name="Tree"
+                              ItemsSource="{Binding Tree}"
+                              SelectedItemChanged="OnTreeSelectionChanged"
+                              MouseDoubleClick="OnRowActivated"
+                              KeyDown="OnRowKeyDown"
+                              Tag="{Binding}"
+                              ContextMenu="{StaticResource RowMenu}"
+                              Margin="6,0,4,8" />
+
+                    <!-- empty state -->
+                    <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                Visibility="{Binding HasReport, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
+                        <Image Source="Assets/app_256.png" Width="84" Height="84" Opacity="0.4"
+                               HorizontalAlignment="Center" Margin="0,0,0,22"
+                               RenderOptions.BitmapScalingMode="HighQuality" />
+                        <TextBlock Text="Drop a coverage XML file here"
+                                   FontSize="15" Foreground="{StaticResource DimBrush}"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Text="CoverageDSPriv from Visual Studio, or Cobertura from coverlet"
+                                   FontSize="12" Foreground="{StaticResource FaintBrush}"
+                                   Margin="0,6,0,0" HorizontalAlignment="Center" />
+                        <TextBlock Style="{StaticResource Mono}" Margin="0,18,0,0"
+                                   Foreground="{StaticResource FaintBrush}" HorizontalAlignment="Center"
+                                   Text="dotnet-coverage merge -o report.xml -f xml *.coverage" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="10" HorizontalAlignment="Stretch"
+                          Background="Transparent" />
+
+            <Border Grid.Column="2" Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Margin="14,11,14,9">
+                        <TextBlock Text="WORK QUEUE" Style="{StaticResource Eyebrow}" />
+                        <TextBlock Text="Types under target, worst first"
+                                   FontSize="11" Foreground="{StaticResource FaintBrush}" Margin="0,3,0,0" />
+                    </StackPanel>
+
+                    <ListBox Grid.Row="1" x:Name="Hotspots"
+                             ItemsSource="{Binding Hotspots}"
+                             SelectionChanged="OnHotspotSelectionChanged"
+                             MouseDoubleClick="OnRowActivated"
+                             KeyDown="OnRowKeyDown"
+                             Tag="{Binding}"
+                             ContextMenu="{StaticResource RowMenu}"
+                             Background="Transparent" BorderThickness="0"
+                             HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             Margin="6,0,4,8">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="8,7" />
+                                <Setter Property="Margin" Value="2,1" />
+                                <Setter Property="Foreground" Value="{StaticResource InkBrush}" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="Bd" CornerRadius="5"
+                                                    Padding="{TemplateBinding Padding}"
+                                                    Background="Transparent"
+                                                    BorderBrush="Transparent" BorderThickness="1">
+                                                <ContentPresenter />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background"
+                                                            Value="{StaticResource HoverBrush}" />
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background"
+                                                            Value="{StaticResource SelectionBrush}" />
+                                                    <Setter TargetName="Bd" Property="BorderBrush"
+                                                            Value="{StaticResource AccentBrush}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="{x:Type m:CoverageNode}">
+                                <StackPanel>
+                                    <Grid>
+                                        <TextBlock Text="{Binding Name}" Style="{StaticResource Mono}"
+                                                   TextTrimming="CharacterEllipsis" Margin="0,0,52,0" />
+                                        <TextBlock Text="{Binding PercentText}"
+                                                   HorizontalAlignment="Right"
+                                                   FontSize="12" FontWeight="SemiBold"
+                                                   Typography.NumeralAlignment="Tabular"
+                                                   Foreground="{Binding LinePercent, Converter={StaticResource PercentBrush}}" />
+                                    </Grid>
+                                    <ContentControl Content="{Binding}" ContentTemplate="{StaticResource Ribbon}"
+                                                    HorizontalAlignment="Left" Margin="0,6,0,0" Focusable="False" />
+                                    <TextBlock Text="{Binding CountsText}" FontSize="11"
+                                               Foreground="{StaticResource FaintBrush}" Margin="0,5,0,0"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <TextBlock Grid.Row="1" Text="Nothing sits under target. Raise it to find the next weakest spot."
+                               Foreground="{StaticResource FaintBrush}" FontSize="12"
+                               TextWrapping="Wrap" TextAlignment="Center" MaxWidth="220"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding HasReport}" Value="True" />
+                                            <Condition Binding="{Binding Hotspots.Count}" Value="0" />
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </MultiDataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ============ status ============ -->
+        <Grid Grid.Row="4" Margin="2,12,2,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel>
+                <TextBlock Text="{Binding Status}" FontSize="11.5"
+                           Foreground="{StaticResource DimBrush}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding SelectionDetail}" Style="{StaticResource Mono}"
+                           FontSize="11" Foreground="{StaticResource FaintBrush}" Margin="0,5,0,0"
+                           Visibility="{Binding HasSelection, Converter={StaticResource BoolToVis}}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                <Rectangle Width="9" Height="9" Fill="{StaticResource CoveredBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="covered" Style="{StaticResource Eyebrow}" Margin="5,0,14,0" VerticalAlignment="Center" />
+                <Rectangle Width="9" Height="9" Fill="{StaticResource PartialBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="partial" Style="{StaticResource Eyebrow}" Margin="5,0,14,0" VerticalAlignment="Center" />
+                <Rectangle Width="9" Height="9" Fill="{StaticResource MissedBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="missed" Style="{StaticResource Eyebrow}" Margin="5,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

@@ -1,0 +1,20 @@
+# Normalise line endings on the way in, check out native on the way out.
+* text=auto
+
+*.cs        text diff=csharp
+*.xaml      text
+*.csproj    text
+*.slnx      text
+*.props     text
+*.md        text
+*.yml       text
+*.json      text
+*.xml       text
+
+# Sample coverage reports are fixtures; keep them byte-stable.
+*.coveragexml -text
+
+# Binary
+*.png       binary
+*.ico       binary
+*.zip       binary

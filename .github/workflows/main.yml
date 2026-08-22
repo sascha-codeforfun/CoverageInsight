@@ -1,0 +1,80 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # attach the artifact to the release
+  id-token: write        # provenance attestation
+  attestations: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore CoverageInsight.slnx
+
+      - name: Build
+        run: dotnet build CoverageInsight.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test CoverageInsight.slnx -c Release --no-build --verbosity normal
+
+      # Everything below runs only when a release is published.
+
+      - name: Publish self-contained single file
+        if: github.event_name == 'release'
+        run: >
+          dotnet publish CoverageInsight/CoverageInsight.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:Version=${{ github.event.release.tag_name }}
+          -o publish
+
+      # Attests that this exact binary was built by this workflow from this commit.
+      # `gh attestation verify` checks it, which is a stronger claim than "trust me,
+      # I built this on my machine".
+      - name: Attest build provenance
+        if: github.event_name == 'release'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: publish/CoverageInsight.exe
+
+      - name: Package
+        if: github.event_name == 'release'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          $zip = "CoverageInsight-$tag-win-x64.zip"
+          Compress-Archive -Path publish/CoverageInsight.exe -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Out-File -Encoding ascii "$zip.sha256"
+          Write-Host "SHA-256  $hash"
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          gh release upload $tag "CoverageInsight-$tag-win-x64.zip" "CoverageInsight-$tag-win-x64.zip.sha256" --clobber

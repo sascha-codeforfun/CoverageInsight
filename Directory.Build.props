@@ -1,0 +1,34 @@
+<Project>
+
+  <!--
+    Settings shared by every project in the repo. Anything added here applies to new
+    projects automatically, which is the point: a per-project copy drifts.
+  -->
+
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <!--
+      Export is not a real build configuration; it is how Directory.Build.targets is
+      invoked. Declaring it here puts it in the Visual Studio configuration dropdown and
+      keeps every project in the solution agreeing on the same list - a project that
+      doesn't know about Export gets mapped to Debug behind your back, which is how you
+      end up compiling when you meant to package.
+
+      Under Export, Directory.Build.targets replaces BuildDependsOn, so no project
+      compiles and only the trigger project does any work.
+    -->
+    <Configurations>Debug;Release;Export</Configurations>
+
+    <!--
+      NU1900 is "could not reach the vulnerability service", which is what you get on any
+      machine without access to api.nuget.org. It is a fact about the machine, not the
+      code. Real audit findings (NU1901-NU1904) are untouched and still warn, so a build
+      with network access - CI, for instance - keeps auditing normally.
+    -->
+    <NoWarn>$(NoWarn);NU1900</NoWarn>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,125 @@
+<Project>
+
+	<PropertyGroup>
+		<ExportTriggerProject>CoverageInsight</ExportTriggerProject>
+		<ExportSourceRoot>$(MSBuildThisFileDirectory)</ExportSourceRoot>
+		<ExportName>CoverageInsight-DEV-$([System.DateTime]::Now.ToString('yyyy-MM-dd'))</ExportName>
+		<ExportDir>$(MSBuildThisFileDirectory)..\_export\$(ExportName)</ExportDir>
+
+		<!-- today's date at midnight, so the zip carries no working times -->
+		<ExportTimestamp>$([System.DateTime]::Now.Date.ToString('yyyy-MM-dd HH:mm:ss'))</ExportTimestamp>
+	</PropertyGroup>
+
+	<!-- under Export, the build does ONLY our export target (no compile, no bin/obj) -->
+	<PropertyGroup Condition="'$(Configuration)' == 'Export'">
+		<BuildDependsOn>ExportSolution</BuildDependsOn>
+	</PropertyGroup>
+
+	<!-- inline C# task: sets timestamps on all files AND folders under a root -->
+	<UsingTask TaskName="SetTimestamps" TaskFactory="RoslynCodeTaskFactory"
+			   AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+		<ParameterGroup>
+			<Root ParameterType="System.String" Required="true" />
+			<Stamp ParameterType="System.String" Required="true" />
+		</ParameterGroup>
+		<Task>
+			<Code Type="Fragment" Language="cs">
+				<![CDATA[
+				var t = System.DateTime.Parse(Stamp);
+				foreach (var f in System.IO.Directory.GetFiles(Root, "*", System.IO.SearchOption.AllDirectories))
+				{
+				    System.IO.File.SetCreationTime(f, t);
+				    System.IO.File.SetLastWriteTime(f, t);
+				    System.IO.File.SetLastAccessTime(f, t);
+				}
+				foreach (var d in System.IO.Directory.GetDirectories(Root, "*", System.IO.SearchOption.AllDirectories))
+				{
+				    System.IO.Directory.SetCreationTime(d, t);
+				    System.IO.Directory.SetLastWriteTime(d, t);
+				    System.IO.Directory.SetLastAccessTime(d, t);
+				}
+				System.IO.Directory.SetCreationTime(Root, t);
+				System.IO.Directory.SetLastWriteTime(Root, t);
+				System.IO.Directory.SetLastAccessTime(Root, t);
+			]]>
+			</Code>
+		</Task>
+	</UsingTask>
+
+	<!--
+		Runs for every project under Export, whether or not the export itself fires, so a
+		build that produces no zip still says why. Silence from this target means the
+		Export configuration never reached the projects at all - check Configuration
+		Manager, where a project that doesn't know the configuration is mapped to Debug.
+	-->
+	<Target Name="ExportDiagnostics" BeforeTargets="Build" Condition="'$(Configuration)' == 'Export'">
+		<Message Importance="high"
+				 Text="Export: project '$(MSBuildProjectName)', trigger '$(ExportTriggerProject)', match=$([System.String]::Equals('$(MSBuildProjectName)', '$(ExportTriggerProject)'))" />
+		<Message Importance="high" Text="Export: target folder $(ExportDir)" />
+	</Target>
+
+	<Target Name="ExportSolution"
+			Condition="'$(Configuration)' == 'Export' and '$(MSBuildProjectName)' == '$(ExportTriggerProject)'">
+
+		<RemoveDir Directories="$(ExportDir)" />
+
+		<ItemGroup>
+			<!-- What must not travel, named one file at a time rather than by pattern.
+			     Every entry below corresponds to something this repo actually contains or
+			     that a build or a run creates here. This project holds no credentials and
+			     no private configuration, so unlike other projects there is nothing here
+			     that is withheld for secrecy - the roster is only about noise.
+
+			     bin, obj, .vs and .git are build and tool state. TestResults is where
+			     `dotnet test` and the VS collector drop .coverage files, which are this
+			     app's input rather than its source.
+
+			     The four export patterns are the app's own output: a run produces
+			     <name>-coverage.html, <name>-coverage.csv, <name>-coverage-ai.csv and
+			     <name>-digest.md. They are the product of the tool, not part of it, and
+			     they are large.
+
+			     Note what is deliberately NOT excluded, since a reader may expect it:
+
+			     Assets holds app.ico and the PNGs. They are a few hundred kilobytes and
+			     add nothing to reading the code, but CoverageInsight.csproj names app.ico
+			     in ApplicationIcon and app_256.png as a Resource, so a zip without them
+			     does not build. A zip that cannot be built is worth less than a zip that
+			     is slightly larger.
+
+			     sample-report.coveragexml and sample-report-vs2026.xml are fixtures. They
+			     are what lets somebody run the app, or reason about the parsers, without
+			     a Visual Studio installation to hand. -->
+			<ExportFiles Include="$(ExportSourceRoot)**\*"
+						 Exclude="
+                     $(ExportSourceRoot)**\bin\**\*;
+                     $(ExportSourceRoot)**\obj\**\*;
+                     $(ExportSourceRoot)**\.vs\**\*;
+                     $(ExportSourceRoot)**\.git\**\*;
+                     $(ExportSourceRoot)**\TestResults\**\*;
+                     $(ExportSourceRoot)**\*.user;
+                     $(ExportSourceRoot)**\*.zip;
+                     $(ExportSourceRoot)**\*-coverage.html;
+                     $(ExportSourceRoot)**\*-coverage.csv;
+                     $(ExportSourceRoot)**\*-coverage-ai.csv;
+                     $(ExportSourceRoot)**\*-digest.md;
+                     $(ExportSourceRoot)docs\**\*;
+                     $(ExportSourceRoot)_export\**\*" />
+		</ItemGroup>
+
+		<Copy SourceFiles="@(ExportFiles)"
+			  DestinationFiles="@(ExportFiles->'$(ExportDir)\%(RecursiveDir)%(Filename)%(Extension)')" />
+
+		<!-- stamp everything AFTER copy, BEFORE zip, so the zip captures the times -->
+		<SetTimestamps Root="$(ExportDir)" Stamp="$(ExportTimestamp)" />
+
+		<ZipDirectory SourceDirectory="$(ExportDir)"
+					  DestinationFile="$(ExportDir).zip"
+					  Overwrite="true" />
+
+		<Message Importance="high" Text="Solution exported to $(ExportDir).zip" />
+		<Message Importance="high" Text="Included: source, tests, sample reports and Assets - the zip builds as it stands." />
+		<Message Importance="high" Text="Excluded: build output, .vs, .git, TestResults and any coverage reports this app has produced." />
+	</Target>
+
+</Project>

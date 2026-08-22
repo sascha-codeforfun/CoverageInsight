@@ -1,0 +1,19 @@
+<Solution>
+
+  <!--
+    Debug and Release would be inferred if this block were absent; Export would not.
+    Listing build types here is what puts Export in the Visual Studio configuration
+    dropdown - the projects declaring <Configurations> in Directory.Build.props only
+    tells each project it understands Export, not the solution that it exists.
+    Once the list is stated explicitly it has to be complete, hence Debug and Release.
+  -->
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Release" />
+    <BuildType Name="Export" />
+  </Configurations>
+
+  <Project Path="CoverageInsight/CoverageInsight.csproj" />
+  <Project Path="CoverageInsight.Tests/CoverageInsight.Tests.csproj" />
+
+</Solution>

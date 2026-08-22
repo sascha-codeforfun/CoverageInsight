@@ -1,0 +1,220 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Text;
+using CoverageInsight.Models;
+
+namespace CoverageInsight.Reporting;
+
+/// <summary>Writes one standalone HTML file — no CDN, no assets, safe to email or attach to a build.</summary>
+public static class HtmlReportWriter
+{
+    public static void Write(CoverageReport report, string outputPath, double threshold)
+    {
+        var root = report.Root;
+        var classes = report.Classes.Where(c => c.HasData).ToList();
+        var risky = classes.Where(c => c.LinePercent < threshold)
+                           .OrderBy(c => c.LinePercent)
+                           .ThenByDescending(c => c.LinesNotCovered)
+                           .ToList();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
+        sb.AppendLine("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+        sb.Append("<title>Coverage — ").Append(Esc(Path.GetFileName(report.SourcePath))).AppendLine("</title>");
+        sb.Append("<link rel=\"icon\" href=\"").Append(ReportIcon.DataUri).AppendLine("\">");
+        sb.AppendLine("<style>" + Css + "</style></head><body>");
+
+        sb.AppendLine("<header class=\"head\">");
+        sb.Append("<img class=\"mark\" alt=\"\" src=\"").Append(ReportIcon.DataUri).AppendLine("\">");
+        sb.AppendLine("<p class=\"eyebrow\">Code coverage</p>");
+        sb.Append("<h1>").Append(Esc(Path.GetFileNameWithoutExtension(report.SourcePath))).AppendLine("</h1>");
+        sb.Append("<p class=\"sub\">")
+          .Append(Esc(report.FormatName)).Append(" · read from ").Append(Esc(report.SourcePath))
+          .Append(" · rendered ").Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm"))
+          .AppendLine("</p>");
+        sb.AppendLine("</header>");
+
+        sb.AppendLine("<section class=\"kpis\">");
+        Kpi(sb, root.LinePercent.ToString("0.0") + "%", "lines covered", Klass(root.LinePercent, threshold));
+        Kpi(sb, root.LinesNotCovered.ToString("N0"), "lines never hit", "warn");
+        Kpi(sb, root.LinesPartiallyCovered.ToString("N0"), "lines partially hit", "warn");
+        if (root.HasBranches)
+            Kpi(sb, root.BranchPercent.ToString("0.0") + "%", "branches covered", Klass(root.BranchPercent, threshold));
+        if (root.HasBlocks)
+            Kpi(sb, root.BlockPercent.ToString("0.0") + "%", "blocks covered", Klass(root.BlockPercent, threshold));
+        Kpi(sb, risky.Count.ToString("N0"), $"types under {threshold:0}%", risky.Count == 0 ? "ok" : "bad");
+        Kpi(sb, classes.Count.ToString("N0"), "types measured", "muted");
+        sb.AppendLine("</section>");
+
+        sb.AppendLine("<section><h2>Where the risk is</h2>");
+        if (risky.Count == 0)
+        {
+            sb.Append("<p class=\"empty\">Every measured type is at or above ")
+              .Append(threshold.ToString("0")).AppendLine("%.</p>");
+        }
+        else
+        {
+            sb.AppendLine("<table><thead><tr><th>Type</th><th class=\"num\">Covered</th>" +
+                          "<th class=\"num\">Missed</th><th class=\"num\">Partial</th><th>Coverage</th></tr></thead><tbody>");
+            foreach (var c in risky.Take(60))
+            {
+                sb.Append("<tr><td><span class=\"path\">").Append(Esc(c.FullPath)).Append("</span>");
+                if (!string.IsNullOrEmpty(c.Location))
+                    sb.Append("<span class=\"loc\">").Append(Esc(c.Location)).Append("</span>");
+                sb.Append("</td>");
+                sb.Append("<td class=\"num\">").Append(c.LinesCovered.ToString("N0")).Append('/')
+                  .Append(c.CoverableLines.ToString("N0")).Append("</td>");
+                sb.Append("<td class=\"num bad\">").Append(c.LinesNotCovered.ToString("N0")).Append("</td>");
+                sb.Append("<td class=\"num\">").Append(c.LinesPartiallyCovered.ToString("N0")).Append("</td>");
+                sb.Append("<td class=\"barcell\">").Append(Bar(c)).Append("</td></tr>");
+                sb.AppendLine();
+            }
+            sb.AppendLine("</tbody></table>");
+            if (risky.Count > 60)
+                sb.Append("<p class=\"empty\">…and ").Append(risky.Count - 60).AppendLine(" more.</p>");
+        }
+        sb.AppendLine("</section>");
+
+        sb.AppendLine("<section><h2>Full breakdown</h2>");
+        foreach (var module in root.Children)
+            WriteNode(sb, module, threshold, open: true);
+        sb.AppendLine("</section>");
+
+        if (report.Notes.Count > 0)
+        {
+            sb.AppendLine("<section><h2>Notes</h2><ul class=\"notes\">");
+            foreach (var note in report.Notes)
+                sb.Append("<li>").Append(Esc(note)).AppendLine("</li>");
+            sb.AppendLine("</ul></section>");
+        }
+
+        sb.AppendLine("<footer>Generated by Coverage Insight.</footer>");
+        sb.AppendLine("</body></html>");
+
+        File.WriteAllText(outputPath, sb.ToString(), new UTF8Encoding(false));
+    }
+
+    private static void WriteNode(StringBuilder sb, CoverageNode node, double threshold, bool open)
+    {
+        var leaf = node.Children.Count == 0;
+        var indentClass = node.Kind switch
+        {
+            NodeKind.Module => "lvl-module",
+            NodeKind.Namespace => "lvl-ns",
+            NodeKind.Class => "lvl-class",
+            _ => "lvl-method"
+        };
+
+        if (leaf)
+        {
+            sb.Append("<div class=\"row ").Append(indentClass).Append("\">")
+              .Append("<span class=\"badge\">").Append(node.KindBadge).Append("</span>")
+              .Append("<span class=\"name\">").Append(Esc(node.Name)).Append("</span>")
+              .Append(Bar(node))
+              .Append("<span class=\"pct ").Append(Klass(node.LinePercent, threshold)).Append("\">")
+              .Append(Esc(node.PercentText)).Append("</span></div>")
+              .AppendLine();
+            return;
+        }
+
+        sb.Append("<details class=\"").Append(indentClass).Append('"').Append(open ? " open" : string.Empty).Append('>');
+        sb.Append("<summary><span class=\"badge\">").Append(node.KindBadge).Append("</span>")
+          .Append("<span class=\"name\">").Append(Esc(node.Name)).Append("</span>")
+          .Append(Bar(node))
+          .Append("<span class=\"pct ").Append(Klass(node.LinePercent, threshold)).Append("\">")
+          .Append(Esc(node.PercentText)).Append("</span>")
+          .Append("<span class=\"counts\">").Append(Esc(node.CountsText)).Append("</span></summary>")
+          .AppendLine();
+
+        foreach (var child in node.Children.OrderBy(c => c.LinePercent))
+            WriteNode(sb, child, threshold, open: false);
+
+        sb.AppendLine("</details>");
+    }
+
+    private static string Bar(CoverageNode n)
+    {
+        if (!n.HasData)
+            return "<span class=\"bar\"><i class=\"seg none\" style=\"width:100%\"></i></span>";
+
+        var covered = 100d * n.BarCovered;
+        var partial = 100d * n.BarPartial;
+        var missed = 100d * n.BarUncovered;
+        return "<span class=\"bar\">" +
+               Seg("cov", covered) + Seg("part", partial) + Seg("miss", missed) +
+               "</span>";
+    }
+
+    private static string Seg(string cls, double pct)
+        => pct <= 0 ? string.Empty
+                    : $"<i class=\"seg {cls}\" style=\"width:{pct.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}%\"></i>";
+
+    private static void Kpi(StringBuilder sb, string value, string label, string cls)
+        => sb.Append("<div class=\"kpi ").Append(cls).Append("\"><b>").Append(Esc(value))
+             .Append("</b><span>").Append(Esc(label)).AppendLine("</span></div>");
+
+    private static string Klass(double pct, double threshold)
+        => pct >= threshold ? "ok" : pct >= threshold * 0.6 ? "warn" : "bad";
+
+    private static string Esc(string? s) => WebUtility.HtmlEncode(s ?? string.Empty);
+
+    private const string Css = """
+    :root{
+      --ink:#12161c; --ink-2:#5b6673; --line:#e2e6ec; --paper:#f7f8fa; --card:#ffffff;
+      --cov:#2f9e6f; --part:#d8a33a; --miss:#cf4b4b; --none:#c8cdd6;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;padding:40px 28px 64px;background:var(--paper);color:var(--ink);
+      font:14px/1.5 "Segoe UI",system-ui,sans-serif;max-width:1180px;margin-inline:auto}
+    .head{position:relative;padding-left:64px;min-height:48px}
+    .mark{position:absolute;left:0;top:2px;width:48px;height:48px}
+    .eyebrow{margin:0;font:600 11px/1 "Segoe UI",sans-serif;letter-spacing:.18em;
+      text-transform:uppercase;color:var(--ink-2)}
+    h1{margin:8px 0 4px;font-size:30px;font-weight:650;letter-spacing:-.02em}
+    .sub{margin:0;color:var(--ink-2);font-size:12.5px;word-break:break-all}
+    h2{margin:40px 0 14px;font-size:15px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-2)}
+    .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:26px}
+    .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+    .kpi b{display:block;font-size:26px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+    .kpi span{display:block;margin-top:2px;font-size:12px;color:var(--ink-2)}
+    .kpi.ok b{color:var(--cov)} .kpi.warn b{color:#b4820f} .kpi.bad b{color:var(--miss)} .kpi.muted b{color:var(--ink)}
+    table{width:100%;border-collapse:collapse;background:var(--card);
+      border:1px solid var(--line);border-radius:10px;overflow:hidden}
+    th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:middle}
+    th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);background:#fbfcfd}
+    tr:last-child td{border-bottom:0}
+    .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+    td.bad{color:var(--miss);font-weight:600}
+    .path{display:block;font-family:Consolas,"Cascadia Mono",monospace;font-size:12.5px}
+    .loc{display:block;color:var(--ink-2);font-size:11px;margin-top:2px;word-break:break-all}
+    .barcell{width:200px}
+    .bar{display:inline-flex;width:180px;height:9px;border-radius:5px;overflow:hidden;
+      background:var(--none);vertical-align:middle;flex:none}
+    .seg{display:block;height:100%}
+    .seg.cov{background:var(--cov)} .seg.part{background:var(--part)}
+    .seg.miss{background:var(--miss)} .seg.none{background:var(--none)}
+    details{background:var(--card);border:1px solid var(--line);border-radius:8px;margin:6px 0}
+    details details{margin:4px 8px 4px 22px}
+    summary{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;list-style:none}
+    summary::-webkit-details-marker{display:none}
+    summary:hover{background:#f2f5f8}
+    .row{display:flex;align-items:center;gap:10px;padding:6px 12px 6px 34px;
+      border-top:1px solid var(--line);font-size:13px}
+    .badge{font:600 9.5px/1 "Segoe UI",sans-serif;letter-spacing:.1em;color:var(--ink-2);
+      border:1px solid var(--line);border-radius:4px;padding:3px 5px;flex:none}
+    .name{font-family:Consolas,"Cascadia Mono",monospace;font-size:12.5px;
+      flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+    .pct{font-variant-numeric:tabular-nums;font-weight:600;width:60px;text-align:right;flex:none}
+    .pct.ok{color:var(--cov)} .pct.warn{color:#b4820f} .pct.bad{color:var(--miss)}
+    .counts{color:var(--ink-2);font-size:11.5px;width:330px;text-align:right;flex:none;white-space:nowrap}
+    .empty{color:var(--ink-2)}
+    .notes{color:var(--ink-2)}
+    footer{margin-top:48px;padding-top:14px;border-top:1px solid var(--line);
+      color:var(--ink-2);font-size:11.5px}
+    @media(max-width:980px){.counts{display:none}.bar{width:110px}}
+    @media print{body{background:#fff}details{break-inside:avoid}}
+    """;
+}

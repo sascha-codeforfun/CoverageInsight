@@ -1,80 +1,113 @@
-name: build
+name: Build & Release
+
+# Release-triggered. Create the GitHub Release (with your own notes) in the UI
+# and publish it — this workflow then runs the full test suite, publishes the
+# self-contained exe, attests build provenance, and attaches the packaged zip
+# and its SHA-256 to that release. A failing test stops everything before
+# anything is published. Manual runs (workflow_dispatch) build, test and attest
+# without attaching, which is how you check the pipeline before tagging.
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   release:
-    types: [ published ]
+    types: [published]
   workflow_dispatch:
 
 permissions:
-  contents: write        # attach the artifact to the release
-  id-token: write        # provenance attestation
-  attestations: write
+  contents: write      # attach assets to the release
+  id-token: write      # sign build provenance (OIDC)
+  attestations: write  # write the provenance attestation
+
+env:
+  DOTNET_VERSION: '10.0.x'                               # .NET 10 SDK: builds net10.0 AND parses .slnx (needs 9.0.200+)
+  SOLUTION_PATH: 'CoverageInsight.slnx'                  # solution (built + tested)
+  PROJECT_PATH: 'CoverageInsight/CoverageInsight.csproj' # the app project (published)
+  APP_NAME: 'CoverageInsight'
+  RUNTIME: 'win-x64'
+  CONFIGURATION: 'Release'
 
 jobs:
   build:
+    # Windows runner is REQUIRED: this is a WPF app, and UseWPF does not build elsewhere.
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v6
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Restore
-        run: dotnet restore CoverageInsight.slnx
+      # Tags carry a v by convention; MSBuild rejects one in Version. A manual run
+      # has no release attached, so it falls back rather than failing.
+      - name: Compute version from release tag
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          if ($tag) { $v = $tag.TrimStart('v') } else { $v = "0.0.0" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "tag=$(if ($tag) { $tag } else { 'v0.0.0' })" >> $env:GITHUB_OUTPUT
 
-      - name: Build
-        run: dotnet build CoverageInsight.slnx -c Release --no-restore
-
+      # Full test suite first — a failing test stops the build before anything
+      # is published, attested, or attached.
       - name: Test
-        run: dotnet test CoverageInsight.slnx -c Release --no-build --verbosity normal
+        run: dotnet test "${{ env.SOLUTION_PATH }}" -c ${{ env.CONFIGURATION }}
 
-      # Everything below runs only when a release is published.
-
-      - name: Publish self-contained single file
-        if: github.event_name == 'release'
+      # Self-contained single-file publish, untrimmed. Trimming stays OFF: WPF
+      # resolves types through XAML at runtime, which the trimmer cannot see.
+      # ReadyToRun stays OFF too — it mainly enlarges the binary here, and the
+      # startup it would save is small against WPF's own initialisation.
+      - name: Publish self-contained single-file exe (all of .NET bundled)
         run: >
-          dotnet publish CoverageInsight/CoverageInsight.csproj
-          -c Release
-          -r win-x64
+          dotnet publish "${{ env.PROJECT_PATH }}"
+          -c ${{ env.CONFIGURATION }}
+          -r ${{ env.RUNTIME }}
           --self-contained true
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:EnableCompressionInSingleFile=true
-          -p:Version=${{ github.event.release.tag_name }}
+          -p:PublishTrimmed=false
+          -p:Version=${{ steps.ver.outputs.version }}
           -o publish
 
-      # Attests that this exact binary was built by this workflow from this commit.
-      # `gh attestation verify` checks it, which is a stronger claim than "trust me,
-      # I built this on my machine".
+      # Drop debug symbols, fold in the licence, zip, then write a SHA-256
+      # sidecar. The version is in the file name so a downloaded zip still says
+      # which release it came from.
+      - name: Stage zip + SHA256 checksum
+        shell: pwsh
+        run: |
+          Get-ChildItem publish -Recurse -Filter *.pdb | Remove-Item -Force
+          if (Test-Path 'LICENSE.txt') { Copy-Item 'LICENSE.txt' publish/ }
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          $name = "${{ env.APP_NAME }}-${{ steps.ver.outputs.tag }}-${{ env.RUNTIME }}.zip"
+          Compress-Archive -Path publish/* -DestinationPath "release/$name" -Force
+          $hash = (Get-FileHash "release/$name" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Set-Content -Path "release/$name.sha256" -Encoding ascii
+          "zip=$name" >> $env:GITHUB_OUTPUT
+          Write-Host "SHA-256  $hash"
+        id: pack
+
+      # Attests the zip rather than the exe: the zip is what people download,
+      # so it is what `gh attestation verify` should match.
       - name: Attest build provenance
-        if: github.event_name == 'release'
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: publish/CoverageInsight.exe
+          subject-path: release/${{ steps.pack.outputs.zip }}
 
-      - name: Package
-        if: github.event_name == 'release'
-        shell: pwsh
-        run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          $zip = "CoverageInsight-$tag-win-x64.zip"
-          Compress-Archive -Path publish/CoverageInsight.exe -DestinationPath $zip
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          "$hash  $zip" | Out-File -Encoding ascii "$zip.sha256"
-          Write-Host "SHA-256  $hash"
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ env.APP_NAME }}-${{ env.RUNTIME }}
+          path: release/*
 
-      - name: Attach to release
+      - name: Attach assets to the release
         if: github.event_name == 'release'
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          gh release upload $tag "CoverageInsight-$tag-win-x64.zip" "CoverageInsight-$tag-win-x64.zip.sha256" --clobber
+        run: >
+          gh release upload ${{ github.event.release.tag_name }}
+          "release/${{ steps.pack.outputs.zip }}"
+          "release/${{ steps.pack.outputs.zip }}.sha256"
+          --clobber
